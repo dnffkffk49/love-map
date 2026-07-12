@@ -534,9 +534,14 @@
         // 2. Love Pastel Theme Palette Definitions
         // ----------------------------------------------------
         const MAP_COLORS = [
-            "#FFB3C1", "#FEC89A", "#F08080", "#D6C7FF", "#B7E4C7", 
-            "#FFE066", "#FFC6FF", "#BDB2FF", "#CAFFBF", "#FDFFB6", 
-            "#FFADAD", "#A8DADC", "#F4A261", "#E76F51", "#C1E1C1"
+            // 🌸 파스텔 톤 15색
+            "#FFB3C1", "#FEC89A", "#F08080", "#D6C7FF", "#B7E4C7",
+            "#FFE066", "#FFC6FF", "#BDB2FF", "#CAFFBF", "#FDFFB6",
+            "#FFADAD", "#A8DADC", "#F4A261", "#E76F51", "#C1E1C1",
+            // 🎨 원색(비비드) 톤 15색
+            "#FF3B30", "#FF6D00", "#FFC400", "#AEEA00", "#00C853",
+            "#00BFA5", "#00B8D4", "#2979FF", "#304FFE", "#6200EA",
+            "#AA00FF", "#D500F9", "#FF4081", "#F50057", "#C51162"
         ];
 
         function getRandomMapColor() {
@@ -918,11 +923,97 @@
             const place = visitedPlaces[index];
             visitedPlaces.splice(index, 1);
             showToast(`🍃 '${place.name}' 여행 기록을 제거했습니다.`);
-            
+
             saveState();
             drawAllColoredRegions();
             updateProgressStats();
             renderVisitedList();
+        }
+
+        // 발자국 수정 창: 도시/군 이름, 날짜, 추억 한 줄을 고칠 수 있음
+        function openEditModal(index) {
+            const place = visitedPlaces[index];
+            if (!place) return;
+
+            const modal = document.createElement('div');
+            modal.className = "fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4";
+            modal.innerHTML = `
+                <div class="bg-white border-2 border-pink-300 p-6 rounded-3xl shadow-2xl max-w-sm w-full fancy-font">
+                    <p class="text-rose-500 font-bold text-xl mb-4 text-center">✏️ 발자국 수정하기</p>
+                    <div class="space-y-3 text-left">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-1">도시 또는 군 이름</label>
+                            <input type="text" id="editName" class="w-full px-3 py-2 rounded-xl border-2 border-pink-100 text-sm focus:outline-none focus:border-pink-400">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-1">여행 날짜</label>
+                            <input type="date" id="editDate" class="w-full px-3 py-2 rounded-xl border-2 border-pink-100 text-sm focus:outline-none focus:border-pink-400">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-1">추억 한 줄</label>
+                            <input type="text" id="editMemo" class="w-full px-3 py-2 rounded-xl border-2 border-pink-100 text-sm focus:outline-none focus:border-pink-400">
+                        </div>
+                    </div>
+                    <div class="flex gap-3 justify-center mt-5">
+                        <button id="saveEditBtn" class="bg-gradient-to-r from-pink-500 to-rose-400 text-white px-5 py-2 rounded-2xl font-bold text-sm shadow-md transition transform active:scale-95">저장하기</button>
+                        <button id="cancelEditBtn" class="bg-slate-200 text-slate-700 px-5 py-2 rounded-2xl font-bold text-sm transition transform active:scale-95">취소</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // 값은 속성이 아니라 프로퍼티로 채워서 따옴표 등 특수문자 문제를 피함
+            const nameInput = modal.querySelector('#editName');
+            const dateInput = modal.querySelector('#editDate');
+            const memoInput = modal.querySelector('#editMemo');
+            nameInput.value = place.name || '';
+            dateInput.value = place.date || '';
+            memoInput.value = place.memo || '';
+            nameInput.focus();
+
+            const doSave = () => {
+                const newName = nameInput.value.trim();
+                const newDate = dateInput.value;
+                const newMemo = memoInput.value.trim();
+
+                if (!newName) {
+                    showToast("⚠️ 도시 또는 군 이름을 입력해 주세요!");
+                    return;
+                }
+
+                const old = visitedPlaces[index];
+                let newCustomCoord = old.customCoord;
+
+                if (REGION_COORDINATES[newName]) {
+                    // 지도에 등록된 지역이면 지도 좌표를 사용
+                    newCustomCoord = null;
+                } else if (!newCustomCoord && REGION_COORDINATES[old.name]) {
+                    // 등록된 지역을 목록에 없는 이름으로 바꾼 경우, 원래 색칠 위치를 유지
+                    newCustomCoord = { ...REGION_COORDINATES[old.name] };
+                }
+
+                visitedPlaces[index] = {
+                    ...old,
+                    name: newName,
+                    date: newDate,
+                    memo: newMemo || "사랑 넘치는 발자국 💖",
+                    customCoord: newCustomCoord
+                };
+
+                saveState();
+                drawAllColoredRegions();
+                updateProgressStats();
+                renderVisitedList();
+                showToast(`✨ '${newName}' 발자국을 수정했어요!`);
+                modal.remove();
+            };
+
+            modal.querySelector('#saveEditBtn').onclick = doSave;
+            modal.querySelector('#cancelEditBtn').onclick = () => modal.remove();
+            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+            [nameInput, memoInput].forEach(inp => {
+                inp.onkeydown = (e) => { if (e.key === 'Enter') doSave(); };
+            });
         }
 
         // ----------------------------------------------------
@@ -1028,9 +1119,14 @@
                             <p class="text-slate-500 text-sm mt-1 font-light leading-relaxed">${item.memo}</p>
                         </div>
                     </div>
-                    <button class="delete-place-btn text-rose-300 hover:text-rose-600 transition p-2 text-sm" data-idx="${item.originalIndex}">
-                        <i class="fa-regular fa-trash-can"></i>
-                    </button>
+                    <div class="flex items-center flex-shrink-0">
+                        <button class="edit-place-btn text-slate-300 hover:text-pink-500 transition p-2 text-sm" data-idx="${item.originalIndex}" title="수정">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                        <button class="delete-place-btn text-rose-300 hover:text-rose-600 transition p-2 text-sm" data-idx="${item.originalIndex}" title="삭제">
+                            <i class="fa-regular fa-trash-can"></i>
+                        </button>
+                    </div>
                 `;
                 listContainer.appendChild(card);
             });
@@ -1039,6 +1135,13 @@
                 btn.onclick = (e) => {
                     const idx = parseInt(btn.getAttribute('data-idx'));
                     deletePlace(idx);
+                };
+            });
+
+            document.querySelectorAll('.edit-place-btn').forEach(btn => {
+                btn.onclick = (e) => {
+                    const idx = parseInt(btn.getAttribute('data-idx'));
+                    openEditModal(idx);
                 };
             });
         }
