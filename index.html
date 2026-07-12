@@ -614,19 +614,21 @@
 
         function drawAllColoredRegions() {
             if (!originalMapImage.complete) return;
-            
+
             ctx.drawImage(baseCanvas, 0, 0);
 
             const width = canvas.width;
             const height = canvas.height;
             if (width === 0 || height === 0) return;
-            
+
             const imgData = ctx.getImageData(0, 0, width, height);
             const data = imgData.data;
+            // 원본(깨끗한) 지도 픽셀 — 바다로 샜을 때 되돌리기용
+            const baseData = baseCtx.getImageData(0, 0, width, height).data;
 
             visitedPlaces.forEach(place => {
                 let startX, startY;
-                
+
                 if (REGION_COORDINATES[place.name]) {
                     const coord = REGION_COORDINATES[place.name];
                     startX = Math.round((coord.x / 100) * width);
@@ -639,50 +641,84 @@
                 }
 
                 const color = hexToRgb(place.colorHex);
-                performInMemoryFloodFill(data, width, height, startX, startY, color);
+                const res = performInMemoryFloodFill(data, baseData, width, height, startX, startY, color);
+
+                // 색칠이 실패했거나(섬처럼 바다로 새는 경우 등) 너무 작으면,
+                // 원래 위치에 색점(마커)을 찍어 반드시 눈에 보이도록 보장한다.
+                if (!res.ok || res.count < 40) {
+                    drawFallbackMarker(data, width, height, startX, startY, color);
+                }
             });
 
             ctx.putImageData(imgData, 0, 0);
         }
 
-        function performInMemoryFloodFill(pixelData, width, height, startX, startY, color) {
-            const visited = new Uint8Array(width * height);
-            const queue = [];
+        // 색칠 실패 지역(섬 등)에 찍는 동그란 색점 마커
+        function drawFallbackMarker(pixelData, width, height, cxp, cyp, color) {
+            const rad = Math.max(6, Math.round(width * 0.012));
+            for (let dy = -rad; dy <= rad; dy++) {
+                for (let dx = -rad; dx <= rad; dx++) {
+                    if (dx*dx + dy*dy > rad*rad) continue;
+                    const nx = cxp + dx, ny = cyp + dy;
+                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+                    const idx = (ny * width + nx) * 4;
+                    pixelData[idx] = color.r;
+                    pixelData[idx+1] = color.g;
+                    pixelData[idx+2] = color.b;
+                    pixelData[idx+3] = 255;
+                }
+            }
+        }
+
+        function performInMemoryFloodFill(pixelData, baseData, width, height, startX, startY, color) {
+            const MAX_FILL = 100000; // 이보다 크게 번지면 '바다로 샌 것'으로 보고 취소
 
             const getIndex = (x, y) => (y * width + x) * 4;
 
             const isWhite = (x, y) => {
                 const idx = getIndex(x, y);
-                const r = pixelData[idx];
-                const g = pixelData[idx+1];
-                const b = pixelData[idx+2];
-                return r > 210 && g > 210 && b > 210;
+                return pixelData[idx] > 210 && pixelData[idx+1] > 210 && pixelData[idx+2] > 210;
             };
 
-            if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
+            // 5x5 블록이 전부 흰색인지 — 글자 사이 1px 틈이 아니라 '실제로 열린 영역'인지 확인
+            const isOpenWhite = (x, y) => {
+                for (let dx = -2; dx <= 2; dx++) {
+                    for (let dy = -2; dy <= 2; dy++) {
+                        const nx = x + dx, ny = y + dy;
+                        if (nx < 0 || nx >= width || ny < 0 || ny >= height) return false;
+                        if (!isWhite(nx, ny)) return false;
+                    }
+                }
+                return true;
+            };
 
-            // 시작점이 흰색(칠할 수 있는 영역)이 아니면 — 경계선/글자 위에 찍힌 경우 —
-            // 주변을 나선형으로 넓혀가며 가장 가까운 흰 영역을 찾아 그 곳을 시작점으로 삼는다.
-            // (좌표가 지도와 살짝 안 맞아도 색칠이 되도록 보정)
-            if (!isWhite(startX, startY)) {
-                const maxRadius = Math.round(width * 0.03); // 이미지 폭의 약 3%까지 탐색
-                let found = false;
-                for (let r = 1; r <= maxRadius && !found; r++) {
-                    for (let dx = -r; dx <= r && !found; dx++) {
-                        for (let dy = -r; dy <= r && !found; dy++) {
-                            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // 현재 반지름 테두리만 검사
-                            const nx = startX + dx;
-                            const ny = startY + dy;
-                            if (nx >= 0 && nx < width && ny >= 0 && ny < height && isWhite(nx, ny)) {
-                                startX = nx;
-                                startY = ny;
-                                found = true;
-                            }
+            if (startX < 0 || startX >= width || startY < 0 || startY >= height) return { ok: false, count: 0 };
+
+            // 시작점 보정: 넓게 열린 흰 영역을 최우선으로 찾는다.
+            // (글자/경계선 위나 글자 사이 좁은 틈에 시작점이 찍히는 문제를 방지)
+            if (!isOpenWhite(startX, startY)) {
+                const maxRadius = Math.round(width * 0.04);
+                let openFound = null, plainFound = null;
+                for (let r = 1; r <= maxRadius && !openFound; r++) {
+                    for (let dx = -r; dx <= r && !openFound; dx++) {
+                        for (let dy = -r; dy <= r; dy++) {
+                            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+                            const nx = startX + dx, ny = startY + dy;
+                            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+                            if (!plainFound && isWhite(nx, ny)) plainFound = [nx, ny];
+                            if (isOpenWhite(nx, ny)) { openFound = [nx, ny]; break; }
                         }
                     }
                 }
-                if (!found) return; // 주변에 칠할 흰 영역이 전혀 없으면 포기
+                const chosen = openFound || plainFound;
+                if (!chosen) return { ok: false, count: 0 };
+                startX = chosen[0];
+                startY = chosen[1];
             }
+
+            const visited = new Uint8Array(width * height);
+            const queue = [];
+            const filled = [];
 
             queue.push(startX, startY);
             visited[startY * width + startX] = 1;
@@ -690,9 +726,21 @@
             while (queue.length > 0) {
                 const cy = queue.pop();
                 const cx = queue.pop();
-
                 const idx = getIndex(cx, cy);
-                
+
+                filled.push(idx);
+
+                // 칠한 영역이 지나치게 커지면 = 바다로 샌 것 → 지금까지 칠한 걸 원상복구하고 실패 반환
+                if (filled.length > MAX_FILL) {
+                    for (const fi of filled) {
+                        pixelData[fi]   = baseData[fi];
+                        pixelData[fi+1] = baseData[fi+1];
+                        pixelData[fi+2] = baseData[fi+2];
+                        pixelData[fi+3] = baseData[fi+3];
+                    }
+                    return { ok: false, count: filled.length };
+                }
+
                 pixelData[idx] = color.r;
                 pixelData[idx+1] = color.g;
                 pixelData[idx+2] = color.b;
@@ -716,6 +764,8 @@
                     }
                 }
             }
+
+            return { ok: true, count: filled.length };
         }
 
         // ----------------------------------------------------
