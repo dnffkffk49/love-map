@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>민우와 지영이의 ♡ Trip</title>
+    <!-- Love Map 아이콘 (지도핀 + 하트) — 별도 파일 없이 브라우저 탭/홈화면에 표시됨 -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23FF6B8B'/><stop offset='1' stop-color='%23FF8E53'/></linearGradient></defs><path d='M50 6C29 6 14 22 14 42 14 68 50 94 50 94 50 94 86 68 86 42 86 22 71 6 50 6Z' fill='url(%23g)'/><path d='M50 60C50 60 33 49 33 38 33 32 38 28 43 28 46 28 49 30 50 33 51 30 54 28 57 28 62 28 67 32 67 38 67 49 50 60 50 60Z' fill='%23ffffff'/><circle cx='50' cy='42' r='6' fill='url(%23g)'/></svg>">
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome for icons -->
@@ -244,7 +246,7 @@
 
                 <!-- Help Info -->
                 <div class="w-full flex justify-between items-center px-2 mb-2 text-xs text-slate-400 font-semibold">
-                    <span>💡 지도를 직접 클릭하여 색칠할 수 있어요!</span>
+                    <span>💡 클릭하면 색칠 · 같은 곳을 빠르게 두 번 클릭하면 지워져요!</span>
                     <button id="resetMapScale" class="text-pink-500 hover:underline">크기 초기화</button>
                 </div>
 
@@ -714,19 +716,42 @@
         // ----------------------------------------------------
         // 6. User Interactions and Direct Clicking Logic
         // ----------------------------------------------------
-        canvas.addEventListener('click', (e) => {
+        // 클릭 지점을 지도 % 좌표로 변환하는 헬퍼
+        function getCanvasPct(e) {
             const rect = canvas.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const clickY = e.clientY - rect.top;
+            const canvasX = Math.round(((e.clientX - rect.left) / rect.width) * canvas.width);
+            const canvasY = Math.round(((e.clientY - rect.top) / rect.height) * canvas.height);
+            return {
+                pctX: (canvasX / canvas.width) * 100,
+                pctY: (canvasY / canvas.height) * 100
+            };
+        }
 
-            const canvasX = Math.round((clickX / rect.width) * canvas.width);
-            const canvasY = Math.round((clickY / rect.height) * canvas.height);
+        // 한 번 클릭 = 색칠 추가 / 빠르게 두 번 클릭 = 지우기(지우개)
+        let canvasClickCount = 0;
+        let canvasClickTimer = null;
 
-            const pctX = (canvasX / canvas.width) * 100;
-            const pctY = (canvasY / canvas.height) * 100;
+        canvas.addEventListener('click', (e) => {
+            canvasClickCount++;
+            if (canvasClickCount === 1) {
+                // 250ms 안에 두 번째 클릭이 없으면 '단일 클릭'으로 처리
+                canvasClickTimer = setTimeout(() => {
+                    handleMapSingleClick(e);
+                    canvasClickCount = 0;
+                }, 250);
+            } else {
+                // 두 번째 클릭이 빠르게 들어오면 '더블클릭'으로 처리 → 지우기
+                clearTimeout(canvasClickTimer);
+                canvasClickCount = 0;
+                handleMapDoubleClick(e);
+            }
+        });
+
+        function handleMapSingleClick(e) {
+            const { pctX, pctY } = getCanvasPct(e);
 
             let nearestCity = null;
-            let minDistance = 3.5; 
+            let minDistance = 3.5;
 
             for (const [cityName, coord] of Object.entries(REGION_COORDINATES)) {
                 const dist = Math.hypot(coord.x - pctX, coord.y - pctY);
@@ -742,7 +767,36 @@
             } else {
                 promptCustomRegion(pctX, pctY, e.clientX, e.clientY);
             }
-        });
+        }
+
+        // 이미 색칠된 곳을 빠르게 두 번 클릭 → 그 기록(색칠)을 지운다
+        function handleMapDoubleClick(e) {
+            const { pctX, pctY } = getCanvasPct(e);
+            const idx = findVisitedPlaceIndexAt(pctX, pctY);
+            if (idx > -1) {
+                const name = visitedPlaces[idx].name;
+                deletePlace(idx);
+                showToast(`🧽 '${name}' 색칠을 지웠어요!`);
+            } else {
+                showToast('🧽 여기엔 지울 색칠이 없어요!');
+            }
+        }
+
+        // 클릭한 지점 근처에 등록된 여행지가 있으면 그 index를 돌려준다
+        function findVisitedPlaceIndexAt(pctX, pctY) {
+            let bestIdx = -1;
+            let bestDist = 4.0; // 이 % 반경 안에서 가장 가까운 등록지를 찾음
+            visitedPlaces.forEach((place, i) => {
+                const coord = REGION_COORDINATES[place.name] || place.customCoord;
+                if (!coord) return;
+                const d = Math.hypot(coord.x - pctX, coord.y - pctY);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx = i;
+                }
+            });
+            return bestIdx;
+        }
 
         canvas.addEventListener('mousemove', (e) => {
             const rect = canvas.getBoundingClientRect();
